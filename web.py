@@ -34,6 +34,7 @@ class VoiceConfig:
     """Voice processing configuration."""
     enabled: bool = True
     tts_mode: str = "full"  # "full" (best quality) or "streaming" (low latency)
+    tts_speed: float = 1.0  # Speech speed multiplier (1.2 = 20% faster)
     asr_device: str = "cuda:0"
     tts_device: str = "cuda:1"
     asr_model: str = "openai/whisper-large-v3-turbo"
@@ -515,6 +516,7 @@ def load_voice_config(config_path: Path) -> VoiceConfig:
 
     return VoiceConfig(
         enabled=enabled,
+        tts_speed=float(os.getenv("TTS_SPEED", voice_data.get("tts_speed", 1.0))),
         asr_device=os.getenv("ASR_DEVICE", cfg_asr_device),
         tts_device=os.getenv("TTS_DEVICE", cfg_tts_device),
         asr_model=os.getenv("ASR_MODEL", voice_data.get("asr_model", VoiceConfig.asr_model)),
@@ -560,12 +562,13 @@ async def lifespan(app: FastAPI):
         )
         asr_engine.warmup()
 
-        print(f"Loading TTS engine: {voice_config.tts_model} on {voice_config.tts_device}")
+        print(f"Loading TTS engine: {voice_config.tts_model} on {voice_config.tts_device} (speed: {voice_config.tts_speed}x)")
         from voice.tts import TTSEngine
         tts_engine = TTSEngine(
             model_id=voice_config.tts_model,
             device=voice_config.tts_device,
             speaker_name=voice_config.speaker,
+            speed=voice_config.tts_speed,
         )
         tts_engine.warmup()
 

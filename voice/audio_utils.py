@@ -11,6 +11,7 @@ import io
 import struct
 import numpy as np
 from scipy import signal
+import librosa
 
 
 def float32_to_int16(audio: np.ndarray) -> np.ndarray:
@@ -60,6 +61,44 @@ def resample_audio(audio: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarra
     resampled = signal.resample(audio, num_samples)
 
     return resampled.astype(audio.dtype)
+
+
+def time_stretch_audio(audio: np.ndarray, rate: float, sample_rate: int = 24000) -> np.ndarray:
+    """Speed up or slow down audio without changing pitch.
+
+    Uses librosa's time-stretching algorithm with padding to prevent
+    clipping artifacts at chunk boundaries.
+
+    Args:
+        audio: Float32 audio array
+        rate: Speed factor (1.2 = 20% faster, 0.8 = 20% slower)
+        sample_rate: Audio sample rate (default 24000 for VibeVoice)
+
+    Returns:
+        Time-stretched audio array
+    """
+    if rate == 1.0:
+        return audio
+
+    # Add padding to give the phase vocoder context at boundaries
+    # This prevents clipping/artifacts at the end of chunks
+    pad_samples = int(sample_rate * 0.05)  # 50ms padding
+    padded = np.pad(audio, (0, pad_samples), mode='constant', constant_values=0)
+
+    # Apply time stretch
+    stretched = librosa.effects.time_stretch(padded, rate=rate)
+
+    # Calculate expected output length and trim padding
+    expected_len = int(len(audio) / rate)
+    stretched = stretched[:expected_len]
+
+    # Apply short fade-out to prevent any remaining edge artifacts
+    fade_samples = min(int(sample_rate * 0.005), len(stretched) // 4)  # 5ms fade
+    if fade_samples > 0 and len(stretched) > fade_samples:
+        fade = np.linspace(1.0, 0.0, fade_samples)
+        stretched[-fade_samples:] *= fade
+
+    return stretched.astype(np.float32)
 
 
 def normalize_audio(audio: np.ndarray, target_db: float = -20.0) -> np.ndarray:

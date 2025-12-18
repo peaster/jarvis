@@ -17,7 +17,7 @@ from typing import AsyncGenerator, Callable, Iterator, Optional
 import numpy as np
 import torch
 
-from voice.audio_utils import float32_to_int16
+from voice.audio_utils import float32_to_int16, time_stretch_audio
 
 
 class DictToAttr:
@@ -114,6 +114,7 @@ class TTSEngine:
         device: str = "cuda",
         torch_dtype: Optional[torch.dtype] = None,
         speaker_name: str = "Carter",
+        speed: float = 1.0,
     ):
         """Initialize the TTS engine.
 
@@ -122,9 +123,11 @@ class TTSEngine:
             device: Device to run inference on ("cuda" or "cpu")
             torch_dtype: PyTorch dtype for model (auto-detected if None)
             speaker_name: Voice/speaker to use for synthesis
+            speed: Speech speed multiplier (1.2 = 20% faster)
         """
         self.device = device
         self.speaker_name = speaker_name
+        self.speed = speed
         self.sample_rate = 24000  # VibeVoice output sample rate
 
         # Auto-detect dtype based on device
@@ -536,12 +539,16 @@ class TTSEngine:
     def _audio_to_bytes(self, audio: np.ndarray) -> bytes:
         """Convert audio array to Int16 PCM bytes for streaming.
 
+        Applies time stretching if speed != 1.0.
+
         Args:
             audio: Float32 audio array
 
         Returns:
             Int16 PCM bytes (little-endian)
         """
+        if self.speed != 1.0:
+            audio = time_stretch_audio(audio, self.speed)
         audio_int16 = float32_to_int16(audio)
         return audio_int16.tobytes()
 
