@@ -10,8 +10,9 @@ import asyncio
 import copy
 import glob
 import os
+import threading
 from pathlib import Path
-from typing import AsyncGenerator, Callable, Optional
+from typing import AsyncGenerator, Callable, Iterator, Optional
 
 import numpy as np
 import torch
@@ -312,6 +313,121 @@ class TTSEngine:
         audio = 0.3 * np.sin(2 * np.pi * 440 * t)  # 440 Hz sine wave
         return audio.astype(np.float32)
 
+    def stream(
+        self,
+        text: str,
+        cfg_scale: float = 1.5,
+        stop_event: Optional[threading.Event] = None,
+    ) -> Iterator[np.ndarray]:
+        """Stream audio generation using VibeVoice's native streaming.
+
+        Uses AudioStreamer to yield audio chunks as they're generated,
+        producing smooth continuous audio without gaps.
+
+        Args:
+            text: Text to synthesize
+            cfg_scale: Classifier-free guidance scale (default 1.5)
+            stop_event: Optional event to signal early stopping
+
+        Yields:
+            Float32 audio chunks as they're generated
+        """
+        if not text or not text.strip():
+            return
+
+        if not self._use_vibevoice:
+            # Fallback: yield single chunk
+            yield self._synthesize_fallback(text)
+            return
+
+        if self.voice_cache is None:
+            print("WARNING: No voice cache loaded, using fallback")
+            yield self._synthesize_fallback(text)
+            return
+
+        # Import AudioStreamer from VibeVoice
+        from vibevoice.modular.streamer import AudioStreamer
+
+        # Clean text
+        text = text.replace("'", "'").replace('"', '"').replace('"', '"')
+
+        # Prepare inputs using the processor with cached voice prompt
+        inputs = self.processor.process_input_with_cached_prompt(
+            text=text.strip(),
+            cached_prompt=self.voice_cache,
+            padding=True,
+            return_tensors="pt",
+            return_attention_mask=True,
+        )
+
+        # Move tensors to device
+        for k, v in inputs.items():
+            if torch.is_tensor(v):
+                inputs[k] = v.to(self.device)
+
+        # Create audio streamer and stop signal
+        audio_streamer = AudioStreamer(batch_size=1, stop_signal=None, timeout=None)
+        stop_signal = stop_event or threading.Event()
+
+        # Run generation in background thread
+        thread = threading.Thread(
+            target=self._run_streaming_generation,
+            kwargs={
+                "inputs": inputs,
+                "audio_streamer": audio_streamer,
+                "cfg_scale": cfg_scale,
+                "stop_event": stop_signal,
+            },
+            daemon=True,
+        )
+        thread.start()
+
+        # Yield audio chunks as they arrive from the queue
+        try:
+            for audio_chunk in audio_streamer.get_stream(0):
+                if torch.is_tensor(audio_chunk):
+                    audio_chunk = audio_chunk.float().cpu().numpy()
+                chunk = audio_chunk.squeeze().astype(np.float32)
+                if chunk.size > 0:
+                    yield chunk
+        finally:
+            stop_signal.set()
+            audio_streamer.end()
+            thread.join(timeout=5.0)
+
+    def _run_streaming_generation(
+        self,
+        inputs: dict,
+        audio_streamer,
+        cfg_scale: float,
+        stop_event: threading.Event,
+    ) -> None:
+        """Run VibeVoice generation in background thread with audio streaming.
+
+        Args:
+            inputs: Prepared model inputs
+            audio_streamer: AudioStreamer to receive audio chunks
+            cfg_scale: Classifier-free guidance scale
+            stop_event: Event to check for early stopping
+        """
+        try:
+            with torch.no_grad():
+                self.model.generate(
+                    **inputs,
+                    max_new_tokens=None,
+                    cfg_scale=cfg_scale,
+                    tokenizer=self.processor.tokenizer,
+                    generation_config={"do_sample": False},
+                    audio_streamer=audio_streamer,
+                    stop_check_fn=stop_event.is_set,
+                    verbose=False,
+                    all_prefilled_outputs=copy.deepcopy(self.voice_cache),
+                )
+        except Exception as e:
+            print(f"TTS streaming generation error: {e}")
+        finally:
+            audio_streamer.end()
+
     async def synthesize_async(self, text: str) -> np.ndarray:
         """Async wrapper for synthesis."""
         return await asyncio.to_thread(self.synthesize, text)
@@ -320,69 +436,72 @@ class TTSEngine:
         self,
         text_generator: AsyncGenerator[str, None],
         on_audio_chunk: Callable[[bytes, bool], None],
-        min_chars: int = 30,
+        min_chars: int = 100,
+        max_chars: int = 500,
     ):
-        """Stream text tokens to audio chunks.
+        """Stream text tokens to audio chunks using native VibeVoice streaming.
 
-        Accumulates text until we have enough for synthesis, then generates
-        audio and sends it via the callback. This enables low-latency audio
-        as the LLM generates text.
+        Accumulates text until we have a complete sentence, then uses
+        VibeVoice's AudioStreamer for smooth continuous audio generation.
 
         Args:
             text_generator: Async generator yielding text chunks
             on_audio_chunk: Async callback receiving (audio_bytes, is_final)
-            min_chars: Minimum characters before generating audio
+            min_chars: Minimum characters before generating audio (default 100)
+            max_chars: Maximum characters before forcing synthesis (default 500)
         """
         text_buffer = ""
-        total_text = ""
 
         # Characters that indicate a good break point for synthesis
-        break_chars = ".!?;:\n"
+        break_chars = ".!?\n"
 
         async for text_chunk in text_generator:
             if not text_chunk:
                 continue
 
             text_buffer += text_chunk
-            total_text += text_chunk
 
-            # Check if we should synthesize
-            should_synthesize = False
-
-            # Synthesize at sentence boundaries
-            for char in break_chars:
-                if char in text_chunk:
-                    should_synthesize = True
+            # Find last break point in buffer
+            break_pos = -1
+            for i in range(len(text_buffer) - 1, -1, -1):
+                if text_buffer[i] in break_chars:
+                    break_pos = i + 1
                     break
 
-            # Or if we have accumulated enough text
-            if len(text_buffer) >= min_chars:
+            should_synthesize = False
+            synth_text = ""
+
+            # Synthesize at natural break points if we have enough text
+            if break_pos > 0 and break_pos >= min_chars:
+                synth_text = text_buffer[:break_pos]
+                text_buffer = text_buffer[break_pos:].lstrip()
+                should_synthesize = True
+            # Force synthesis if buffer is getting too large (prevents runaway)
+            elif len(text_buffer) >= max_chars:
+                synth_text = text_buffer
+                text_buffer = ""
                 should_synthesize = True
 
-            if should_synthesize and text_buffer.strip():
-                # Generate audio for accumulated text
+            if should_synthesize and synth_text.strip():
+                # Use native streaming - yields chunks as generated
                 try:
-                    audio = await self.synthesize_async(text_buffer)
-                    if len(audio) > 0:
-                        audio_bytes = self._audio_to_bytes(audio)
+                    for audio_chunk in self.stream(synth_text):
+                        audio_bytes = self._audio_to_bytes(audio_chunk)
                         await on_audio_chunk(audio_bytes, False)
                 except Exception as e:
-                    print(f"TTS synthesis error: {e}")
-
-                text_buffer = ""
+                    print(f"TTS streaming error: {e}")
 
         # Final chunk - synthesize any remaining text
         if text_buffer.strip():
             try:
-                audio = await self.synthesize_async(text_buffer)
-                if len(audio) > 0:
-                    audio_bytes = self._audio_to_bytes(audio)
-                    await on_audio_chunk(audio_bytes, True)
+                for audio_chunk in self.stream(text_buffer):
+                    audio_bytes = self._audio_to_bytes(audio_chunk)
+                    await on_audio_chunk(audio_bytes, False)
             except Exception as e:
-                print(f"TTS synthesis error: {e}")
-        else:
-            # Signal completion even if no remaining text
-            await on_audio_chunk(b"", True)
+                print(f"TTS streaming error: {e}")
+
+        # Signal completion
+        await on_audio_chunk(b"", True)
 
     def _audio_to_bytes(self, audio: np.ndarray) -> bytes:
         """Convert audio array to Int16 PCM bytes for streaming.
