@@ -33,6 +33,7 @@ from mcp_agent import MCPAgent, Config
 class VoiceConfig:
     """Voice processing configuration."""
     enabled: bool = True
+    tts_mode: str = "full"  # "full" (best quality) or "streaming" (low latency)
     asr_device: str = "cuda:0"
     tts_device: str = "cuda:1"
     asr_model: str = "openai/whisper-large-v3-turbo"
@@ -712,15 +713,25 @@ async def process_agent_response(websocket: WebSocket, session: VoiceSession, us
         await websocket.send_json({"type": "error", "message": "Agent not ready"})
         return
 
-    # Token queue for TTS
-    token_queue: asyncio.Queue = asyncio.Queue()
+    # Determine TTS mode
+    tts_mode = voice_config.tts_mode if voice_config else "full"
+
+    # For "full" mode, we collect the complete response before TTS
+    # For "streaming" mode, we stream tokens to TTS as they arrive
+    full_response_text = ""
     response_complete = asyncio.Event()
+
+    # Token queue for streaming mode TTS
+    token_queue: asyncio.Queue = asyncio.Queue()
 
     async def on_token(token: str, is_final: bool):
         """Callback for each LLM token."""
+        nonlocal full_response_text
         if token:
             await websocket.send_json({"type": "response_text", "chunk": token})
-        await token_queue.put((token, is_final))
+            full_response_text += token
+        if tts_mode == "streaming":
+            await token_queue.put((token, is_final))
         if is_final:
             response_complete.set()
 
@@ -731,7 +742,7 @@ async def process_agent_response(websocket: WebSocket, session: VoiceSession, us
     # Signal response start
     await websocket.send_json({"type": "response_start"})
 
-    # Create token generator for TTS
+    # Create token generator for streaming mode TTS
     async def token_generator():
         while True:
             try:
@@ -760,7 +771,8 @@ async def process_agent_response(websocket: WebSocket, session: VoiceSession, us
             return response
         except Exception as e:
             await websocket.send_json({"type": "error", "message": str(e)})
-            await token_queue.put(("", True))
+            if tts_mode == "streaming":
+                await token_queue.put(("", True))
             response_complete.set()
             return None
 
@@ -773,7 +785,13 @@ async def process_agent_response(websocket: WebSocket, session: VoiceSession, us
     # Stream TTS if available
     if tts_engine and voice_config and voice_config.enabled:
         try:
-            await tts_engine.synthesize_streaming(token_generator(), on_audio_chunk)
+            if tts_mode == "full":
+                # Wait for complete response, then synthesize for best quality
+                await response_complete.wait()
+                await tts_engine.synthesize_full_text(full_response_text, on_audio_chunk)
+            else:
+                # Stream tokens to TTS as they arrive (lower latency, lower quality)
+                await tts_engine.synthesize_streaming(token_generator(), on_audio_chunk)
         except Exception as e:
             print(f"TTS error: {e}")
     else:

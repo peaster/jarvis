@@ -432,6 +432,36 @@ class TTSEngine:
         """Async wrapper for synthesis."""
         return await asyncio.to_thread(self.synthesize, text)
 
+    async def synthesize_full_text(
+        self,
+        text: str,
+        on_audio_chunk: Callable[[bytes, bool], None],
+    ):
+        """Synthesize complete text using VibeVoice's native streaming.
+
+        Sends full text to VibeVoice in a single call, letting it handle
+        internal windowing for optimal prosody and audio quality. This
+        produces smoother, more natural speech than chunked synthesis.
+
+        Args:
+            text: Complete text to synthesize
+            on_audio_chunk: Async callback receiving (audio_bytes, is_final)
+        """
+        if not text or not text.strip():
+            await on_audio_chunk(b"", True)
+            return
+
+        try:
+            # Use native streaming - yields chunks as generated
+            for audio_chunk in self.stream(text):
+                audio_bytes = self._audio_to_bytes(audio_chunk)
+                await on_audio_chunk(audio_bytes, False)
+        except Exception as e:
+            print(f"TTS full text error: {e}")
+
+        # Signal completion
+        await on_audio_chunk(b"", True)
+
     async def synthesize_streaming(
         self,
         text_generator: AsyncGenerator[str, None],
