@@ -1,0 +1,124 @@
+# Docker Compose Stack for Local Voice MCP Agent
+# Target: Dual RTX 3090/4090 GPUs (24GB VRAM each)
+#
+# Services:
+#   - vllm: LLM inference server (Devstral 24B, tensor-parallel across both GPUs)
+#   - voice-agent: FastAPI server with Whisper ASR (cuda:0) + VibeVoice TTS (cuda:1)
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+#   open http://localhost:3000
+
+services:
+  # ===========================================================================
+  # vLLM - LLM Inference Server
+  # Uses tensor-parallel-size=2 across both GPUs
+  # Memory: ~70% of each GPU (~16.8GB per GPU)
+  # ===========================================================================
+  vllm:
+    image: vllm/vllm-openai:nightly
+    container_name: jarvis-vllm
+    command:
+      - --model
+      - mistralai/Devstral-Small-2-24B-Instruct-2512
+      - --max_model_len
+      - "49000"
+      - --gpu-memory-utilization
+      - "0.75"
+      - --served-model-name
+      - devstral-2-24b
+      - --tool-call-parser
+      - mistral
+      - --enable-auto-tool-choice
+      - --tensor-parallel-size
+      - "2"
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface:rw
+    environment:
+      - CUDA_VISIBLE_DEVICES=0,1
+      - HF_HOME=/root/.cache/huggingface
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+    networks:
+      - jarvis-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2
+              capabilities: [gpu]
+    #depends_on:
+    #  voice-agent:
+    #    condition: service_healthy
+    ipc: host
+
+  # ===========================================================================
+  # Voice Agent - Main Application
+  # FastAPI + Whisper ASR (cuda:0) + VibeVoice TTS (cuda:1)
+  # Memory: ASR ~6GB on GPU 0, TTS ~2-3GB on GPU 1 (shares headroom with vLLM)
+  # ===========================================================================
+  voice-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: jarvis-voice-agent
+    ports:
+      - "${VOICE_AGENT_PORT:-3000}:3000"
+    volumes:
+      # HuggingFace model cache (shared with vLLM for efficiency)
+      - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface:rw
+    environment:
+      # LLM Configuration (connects to vllm service)
+      - LLM_BASE_URL=http://vllm:8000/v1
+      - LLM_API_KEY=not-needed
+      - LLM_MODEL=devstral-2-24b
+      # Voice Configuration
+      - VOICE_ENABLED=true
+      - ASR_DEVICE=cuda:0
+      - TTS_DEVICE=cuda:1
+      - ASR_MODEL=openai/whisper-large-v3-turbo
+      - TTS_MODEL=microsoft/VibeVoice-Realtime-0.5B
+      - TTS_SPEAKER=Carter
+      # Agent Configuration
+      - AGENT_MAX_STEPS=30
+      # GPU visibility
+      - CUDA_VISIBLE_DEVICES=0,1
+      - NVIDIA_VISIBLE_DEVICES=all
+      # MCP Server configuration (SearXNG URL for search)
+      #- SEARXNG_URL=${SEARXNG_URL:-https://search.searxng.com}
+    networks:
+      - jarvis-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 2
+              capabilities: [gpu]
+    ipc: host
+
+networks:
+  jarvis-net:
+    driver: bridge
+    name: jarvis-network

@@ -1,0 +1,29 @@
+# MCP Agent Requirements
+
+# OpenAI-compatible client (works with vLLM)
+openai>=1.40.0
+
+# MCP SDK
+mcp>=1.0.0
+
+# HTTP client (required by MCP SDK for SSE)
+httpx>=0.27.0
+
+# Web interface
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Voice processing - Core
+torch>=2.0.0
+transformers==4.51.3  # pinned for VibeVoice compatibility
+accelerate==1.6.0  # pinned for VibeVoice compatibility
+
+# Audio processing
+numpy>=1.24.0
+scipy>=1.10.0
+librosa>=0.10.0
+soundfile>=0.12.0
+
+# Note: VibeVoice TTS requires installation from source:
+#   git clone https://github.com/microsoft/VibeVoice.git
+#   cd VibeVoice && pip install -e .

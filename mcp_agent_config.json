@@ -1,0 +1,37 @@
+{
+  "llm": {
+    "base_url": "http://vllm:/v1",
+    "api_key": "not-needed",
+    "model": "devstral-2-24b",
+    "temperature": 0.15,
+    "max_tokens": 4096
+  },
+
+  "mcp_servers": [
+    {
+      "name": "playwright",
+      "type": "stdio",
+      "command": "npx -y @playwright/mcp@latest --browser firefox"
+    },
+    {
+      "name": "searxng",
+      "type": "stdio",
+      "command": "npx -y mcp-searxng"
+    }
+  ],
+
+  "agent": {
+    "max_steps": 30,
+    "system_prompt": "You are a helpful voice assistant with access to tools. Use them to accomplish tasks. Keep responses concise and conversational since they will be spoken aloud."
+  },
+
+  "voice": {
+    "enabled": true,
+    "device": "cuda",
+    "asr_model": "openai/whisper-large-v3-turbo",
+    "tts_model": "microsoft/VibeVoice-Realtime-0.5B",
+    "speaker": "Carter",
+    "sample_rate_in": 16000,
+    "sample_rate_out": 24000
+  }
+}
