@@ -83,7 +83,7 @@ services:
       - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface:rw
     environment:
       # LLM Configuration (connects to vllm service)
-      - LLM_BASE_URL=http://vllm:8000/v1
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
       - LLM_API_KEY=not-needed
       - LLM_MODEL=devstral-2-24b
       # Voice Configuration
@@ -99,7 +99,7 @@ services:
       - CUDA_VISIBLE_DEVICES=0,1
       - NVIDIA_VISIBLE_DEVICES=all
       # MCP Server configuration (SearXNG URL for search)
-      #- SEARXNG_URL=${SEARXNG_URL:-https://search.searxng.com}
+      - SEARXNG_URL=${SEARXNG_URL:-}
     networks:
       - jarvis-net
     healthcheck:

@@ -1,1 +1,17 @@
 __pycache__
+*.pyc
+*.pyo
+
+# Environment variables (contains personal/sensitive config)
+.env
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code
+.claude/

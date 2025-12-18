@@ -1,6 +1,6 @@
 {
   "llm": {
-    "base_url": "http://vllm:/v1",
+    "base_url": "http://vllm:8000/v1",
     "api_key": "not-needed",
     "model": "devstral-2-24b",
     "temperature": 0.15,
