@@ -541,8 +541,9 @@ async def lifespan(app: FastAPI):
         name = server.get("name")
         if server_type == "stdio":
             command = server.get("command")
+            env = server.get("env")
             if command:
-                await agent.connect_stdio(command, name)
+                await agent.connect_stdio(command, name, env=env)
         elif server_type == "sse":
             url = server.get("url")
             if url:

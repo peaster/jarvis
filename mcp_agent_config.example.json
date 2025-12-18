@@ -16,7 +16,10 @@
     {
       "name": "searxng",
       "type": "stdio",
-      "command": "npx -y mcp-searxng"
+      "command": "npx -y mcp-searxng",
+      "env": {
+        "SEARXNG_URL": "https://your-searxng-instance.example.com"
+      }
     }
   ],
 

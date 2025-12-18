@@ -108,9 +108,11 @@ class MCPAgent:
         self.tool_to_connection: dict[str, MCPConnection] = {}
         self._exit_stack = AsyncExitStack()
     
-    async def connect_stdio(self, command: str, name: str | None = None):
+    async def connect_stdio(self, command: str, name: str | None = None, env: dict[str, str] | None = None):
         """Connect to an MCP server via stdio (runs through shell for env var support)."""
-        params = StdioServerParameters(command="sh", args=["-c", command])
+        # Merge parent env with provided env (provided takes precedence)
+        server_env = {**os.environ, **(env or {})}
+        params = StdioServerParameters(command="sh", args=["-c", command], env=server_env)
 
         # Use exit stack to properly manage context managers
         streams = await self._exit_stack.enter_async_context(stdio_client(params))

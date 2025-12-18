@@ -74,10 +74,10 @@ The LLM runs in tensor-parallel mode across both GPUs.
    cd jarvis
    ```
 
-2. Copy environment configuration:
+2. Copy and customize the configuration:
    ```bash
-   cp .env.example .env
-   # Edit .env with your settings
+   cp mcp_agent_config.example.json mcp_agent_config.json
+   # Edit mcp_agent_config.json with your settings
    ```
 
 3. Start with Docker Compose:
@@ -89,10 +89,22 @@ The LLM runs in tensor-parallel mode across both GPUs.
 
 ## Configuration
 
-Edit `mcp_agent_config.json` to configure:
-- LLM endpoint and model settings
-- MCP server connections (tools)
-- Agent behavior (system prompt, max steps)
+All configuration is in `mcp_agent_config.json`:
 
-Environment variables can override defaults - see `.env.example` for options.
+- **llm**: LLM endpoint URL, model name, and generation settings
+- **mcp_servers**: Tool servers (Playwright, SearXNG, etc.) with optional environment variables
+- **agent**: System prompt and max reasoning steps
+- **voice**: ASR/TTS models, devices, and audio settings
+
+Example MCP server with environment variables:
+```json
+{
+  "name": "searxng",
+  "type": "stdio",
+  "command": "npx -y mcp-searxng",
+  "env": {
+    "SEARXNG_URL": "https://your-searxng-instance.example.com"
+  }
+}
+```
 
